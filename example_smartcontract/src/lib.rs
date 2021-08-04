@@ -3,7 +3,7 @@
 
 use alloc::vec::Vec;
 use data_model::Account;
-use parity_scale_codec::Decode;
+use parity_scale_codec::{Decode, Encode};
 
 extern crate alloc;
 extern crate wee_alloc;
@@ -37,19 +37,30 @@ pub extern "C" fn push(byte: u32) {
 }
 
 #[no_mangle]
-pub extern "C" fn remove_first() -> u32 {
-    unsafe { STACK.remove(0) as u32 }
+pub extern "C" fn pop() -> u32 {
+    unsafe { STACK.pop().expect("Failed to pop.") as u32 }
 }
 
 fn pop_argument<T: Decode>(size: u32) -> T {
     let mut bytes = Vec::new();
     for _ in 0..size {
-        bytes.push(unsafe { STACK.remove(0) });
+        bytes.push(unsafe { STACK.pop().expect("Failed to pop.") });
     }
     T::decode(&mut &bytes[..]).expect("Failed to decode")
 }
 
+fn push_argument<T: Encode>(argument: T) -> u32 {
+    let mut bytes = argument.encode();
+    let size = bytes.len();
+    bytes.reverse();
+    for byte in bytes {
+        unsafe { STACK.push(byte as u8) }
+    }
+    size as u32
+}
+
 #[no_mangle]
 pub extern "C" fn execute(account_size: u32) -> u32 {
-    pop_argument::<Account>(account_size).name.len() as u32
+    let account = pop_argument::<Account>(account_size);
+    0
 }
