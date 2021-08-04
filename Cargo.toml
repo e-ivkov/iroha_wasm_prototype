@@ -1,0 +1,7 @@
+[workspace]
+
+members = [
+    "data_model",
+    "example_smartcontract",
+    "runtime"
+]

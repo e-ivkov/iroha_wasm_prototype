@@ -1,0 +1,10 @@
+[package]
+name = "data_model"
+version = "0.1.0"
+authors = ["Egor Ivkov <e.o.ivkov@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+parity-scale-codec = {version = "2.2.0", features = ["full", "derive"], default-features = false}
