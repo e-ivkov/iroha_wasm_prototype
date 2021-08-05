@@ -4,7 +4,7 @@ use data_model::{Account, AccountName, Instruction, Query, QueryResult};
 
 #[derive(Debug)]
 pub struct WSV {
-    accounts: HashMap<AccountName, Account>,
+    pub accounts: HashMap<AccountName, Account>,
 }
 
 impl WSV {

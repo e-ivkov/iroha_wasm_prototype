@@ -1,8 +1,10 @@
-use std::sync::{Arc, RwLock};
+use std::{
+    iter,
+    sync::{Arc, RwLock},
+};
 
-use anyhow::{anyhow, Result};
-use data_model::{Account, Instruction, Query};
-use parity_scale_codec::{Decode, Encode};
+use anyhow::Result;
+use data_model::{Account, Instruction, Query, Stack};
 use wasmtime::*;
 use wsv::WSV;
 
@@ -13,109 +15,120 @@ struct State {
     stack: Vec<u8>,
 }
 
+struct WasmStack<'a> {
+    push_fn: TypedFunc<u32, ()>,
+    pop_fn: TypedFunc<(), u32>,
+    store: &'a mut Store<State>,
+}
+
+impl<'a> WasmStack<'a> {
+    pub fn from_store(store: &'a mut Store<State>, instance: &Instance) -> WasmStack<'a> {
+        let push_fn = instance
+            .get_func(&mut *store, "push")
+            .expect("`push` was not an exported function");
+        let push_fn = push_fn.typed::<u32, (), _>(&store).unwrap();
+        let pop_fn = instance
+            .get_func(&mut *store, "pop")
+            .expect("`pop` was not an exported function");
+        let pop_fn = pop_fn.typed::<(), u32, _>(&store).unwrap();
+        WasmStack {
+            store,
+            push_fn,
+            pop_fn,
+        }
+    }
+}
+
+impl<'a> Stack for WasmStack<'a> {
+    fn push(&mut self, byte: u8) {
+        self.push_fn.call(&mut *self.store, byte as u32).unwrap()
+    }
+
+    fn pop(&mut self) -> u8 {
+        self.pop_fn.call(&mut *self.store, ()).unwrap() as u8
+    }
+}
+
+impl Stack for State {
+    fn push(&mut self, byte: u8) {
+        self.stack.push(byte)
+    }
+
+    fn pop(&mut self) -> u8 {
+        self.stack.pop().unwrap()
+    }
+}
+
 fn main() -> Result<()> {
     let engine = Engine::default();
     let mut linker = Linker::new(&engine);
+    linker
+        .func_wrap(
+            "stack",
+            "push",
+            |mut caller: Caller<'_, State>, value: u32| caller.data_mut().stack.push(value as u8),
+        )
+        .unwrap();
+    linker
+        .func_wrap("stack", "pop", |mut caller: Caller<'_, State>| {
+            caller.data_mut().stack.pop().unwrap() as u32
+        })
+        .unwrap();
+    linker
+        .func_wrap(
+            "iroha",
+            "execute_instruction",
+            |mut caller: Caller<'_, State>, size: u32| {
+                let instruction: Instruction = caller.data_mut().pop_argument::<Instruction>(size);
+                caller
+                    .data()
+                    .wsv
+                    .write()
+                    .unwrap()
+                    .execute_instruction(instruction);
+            },
+        )
+        .unwrap();
+    linker
+        .func_wrap(
+            "iroha",
+            "execute_query",
+            |mut caller: Caller<'_, State>, size: u32| {
+                let query: Query = caller.data_mut().pop_argument::<Query>(size);
+                let query_result = caller.data().wsv.write().unwrap().execute_query(query);
+                caller.data_mut().push_argument(query_result)
+            },
+        )
+        .unwrap();
+
     let module = Module::from_file(&engine, "example_smartcontract.wasm")?;
-    let mut store = Store::new(&engine, ());
-    let instance = Instance::new(&mut store, &module, &[])?;
-    linker.func_wrap(
-        "stack",
-        "push",
-        |mut caller: Caller<'_, State>, value: u32| caller.data_mut().stack.push(value as u8),
-    );
-    linker.func_wrap("stack", "pop", |mut caller: Caller<'_, State>| {
-        caller.data_mut().stack.pop().unwrap() as u32
-    });
-    linker.func_wrap(
-        "iroha",
-        "execute_instruction",
-        |mut caller: Caller<'_, State>, size: u32| {
-            let instruction: Instruction =
-                pop_argument_state::<Instruction>(size, caller.data_mut());
-            caller
-                .data()
-                .wsv
-                .write()
-                .unwrap()
-                .execute_instruction(instruction);
+    let wsv = Arc::new(RwLock::new(WSV {
+        accounts: iter::once((
+            "alice".to_owned(),
+            Account {
+                name: "alice".to_owned(),
+                balance: 100,
+            },
+        ))
+        .collect(),
+    }));
+    let mut store = Store::new(
+        &engine,
+        State {
+            wsv: wsv.clone(),
+            stack: Vec::new(),
         },
     );
-    linker.func_wrap(
-        "iroha",
-        "execute_query",
-        |mut caller: Caller<'_, State>, size: u32| {
-            let query: Query = pop_argument_state::<Query>(size, caller.data_mut());
-            let query_result = caller.data().wsv.write().unwrap().execute_query(query);
-            push_argument_state(query_result, caller.data_mut())
-        },
-    );
+    let instance = linker.instantiate(&mut store, &module)?;
 
-    let push = instance
-        .get_func(&mut store, "push")
-        .expect("`push` was not an exported function");
-    let push = push.typed::<u32, (), _>(&store)?;
-    let pop = instance
-        .get_func(&mut store, "pop")
-        .expect("`pop` was not an exported function");
-    let pop = pop.typed::<(), u32, _>(&store)?;
-
-    let account = Account {
-        name: "alice in wonderland".to_owned(),
-        balance: 0,
-    };
-    let account_bytes = push_argument_wasm(account, push, &mut store)?;
+    let account_bytes =
+        WasmStack::from_store(&mut store, &instance).push_argument("alice".to_owned());
 
     let execute = instance
         .get_func(&mut store, "execute")
         .expect("`execute` was not an exported function");
     let execute = execute.typed::<u32, (), _>(&store)?;
-    let result = execute.call(&mut store, account_bytes)?;
-    println!("Name has letters: {:?}", result);
+    execute.call(&mut store, account_bytes)?;
+    println!("WSV: {:?}", wsv);
     Ok(())
-}
-
-fn push_argument_wasm<T: Encode>(
-    argument: T,
-    push_fn: TypedFunc<u32, ()>,
-    store: &mut Store<()>,
-) -> Result<u32> {
-    let mut bytes = argument.encode();
-    let size = bytes.len();
-    bytes.reverse();
-    for byte in bytes {
-        push_fn.call(&mut *store, byte as u32)?
-    }
-    Ok(size as u32)
-}
-
-fn pop_argument_wasm<T: Decode>(
-    size: u32,
-    pop_fn: TypedFunc<(), u32>,
-    store: &mut Store<()>,
-) -> Result<T> {
-    let mut bytes: Vec<u8> = Vec::new();
-    for _ in 0..size {
-        bytes.push(pop_fn.call(&mut *store, ())? as u8);
-    }
-    let argument = T::decode(&mut &bytes[..]).map_err(|err| anyhow!(err.to_string()))?;
-    Ok(argument)
-}
-
-fn pop_argument_state<T: Decode>(size: u32, state: &mut State) -> T {
-    let mut bytes = Vec::new();
-    for _ in 0..size {
-        bytes.push(state.stack.pop().unwrap());
-    }
-    T::decode(&mut &bytes[..]).expect("Failed to decode")
-}
-
-fn push_argument_state<T: Encode>(argument: T, state: &mut State) -> u32 {
-    let mut bytes = argument.encode();
-    let size = bytes.len();
-    bytes.reverse();
-    for byte in bytes {
-        state.stack.push(byte as u8)
-    }
-    size as u32
 }
