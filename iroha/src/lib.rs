@@ -55,6 +55,9 @@ impl Stack for State {
     }
 }
 
+/// Every WASM instruction costs approximately 1 unit. See https://docs.rs/wasmtime/0.29.0/wasmtime/struct.Store.html#method.add_fuel
+const FUEL_LIMIT: u64 = 10_000;
+
 struct WasmRuntime {
     engine: Engine,
     linker: Linker<State>,
@@ -62,7 +65,9 @@ struct WasmRuntime {
 
 impl WasmRuntime {
     pub fn new() -> WasmRuntime {
-        let engine = Engine::default();
+        let mut config = Config::new();
+        config.consume_fuel(true);
+        let engine = Engine::new(&config).unwrap();
         let mut linker = Linker::new(&engine);
         linker
             .func_wrap(
@@ -117,6 +122,7 @@ impl WasmRuntime {
                 stack: Vec::new(),
             },
         );
+        store.add_fuel(FUEL_LIMIT).unwrap();
         let instance = self.linker.instantiate(&mut store, &module).unwrap();
         let account_bytes =
             WasmStack::from_store(&mut store, &instance).push_argument(account_name.to_owned());
