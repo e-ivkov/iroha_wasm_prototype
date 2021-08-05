@@ -480,6 +480,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroha"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "data_model",
+ "parity-scale-codec",
+ "wasmtime",
+]
+
+[[package]]
 name = "itertools"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -799,16 +809,6 @@ dependencies = [
  "libc",
  "mach",
  "winapi",
-]
-
-[[package]]
-name = "runtime"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "data_model",
- "parity-scale-codec",
- "wasmtime",
 ]
 
 [[package]]

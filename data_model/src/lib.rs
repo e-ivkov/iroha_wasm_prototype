@@ -7,7 +7,7 @@ use parity_scale_codec::{Decode, Encode};
 
 pub type AccountName = String;
 
-#[derive(Encode, Decode, Debug)]
+#[derive(Encode, Decode, Debug, Clone)]
 pub enum Instruction {
     Mint(u32, AccountName),
     Burn(u32, AccountName),

@@ -1,5 +1,5 @@
 [package]
-name = "runtime"
+name = "iroha"
 version = "0.1.0"
 authors = ["Egor Ivkov <e.o.ivkov@gmail.com>"]
 edition = "2018"
